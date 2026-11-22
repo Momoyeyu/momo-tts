@@ -9,9 +9,11 @@ engine_commit=d9e41aac89fd00b3d71497fddb287b7f24613712
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
-mkdir -p "$state" "$config"
-exec 9>"$state/deployment.lock"
-flock -n 9 || fail "Another deployment is running"
+if [[ "${1:-}" != probe ]]; then
+    mkdir -p "$state" "$config"
+    exec 9>"$state/deployment.lock"
+    flock -n 9 || fail "Another deployment is running"
+fi
 
 prepare() {
     local data="${1:?Pass a writable data directory on the model disk}"
