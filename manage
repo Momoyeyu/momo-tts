@@ -69,6 +69,11 @@ prepare_models() {
         git -C "$state/upstream" fetch --depth 1 origin "$engine_commit"
     fi
     GIT_LFS_SKIP_SMUDGE=1 git -C "$state/upstream" checkout -q --detach "$engine_commit"
+    mkdir -p "$MOMO_INDEX_DATA/cache/tagger"
+    local tagger="$state/upstream/indextts/utils/tagger_cache"
+    if [[ ! -e "$tagger" && ! -L "$tagger" ]]; then
+        ln -s "$MOMO_INDEX_DATA/cache/tagger" "$tagger"
+    fi
     uv sync --project "$state/upstream" --python 3.11 --frozen --no-install-project
     uv pip install --python "$MOMO_INDEX_DATA/venv/bin/python" -r "$source_dir/requirements.txt"
     PYTHONPATH="$source_dir" "$MOMO_INDEX_DATA/venv/bin/python" -m momo_tts.checkpoints

@@ -1,6 +1,6 @@
-# momo IndexTTS 服务
+# momo 语音服务
 
-momo 的 IndexTTS 2.5 推理服务。momo 设置可在 IndexTTS 和现有 GPT-SoVITS 之间切换，分别保存地址和密钥。两个引擎使用应用内同一份参考音频。GPT-SoVITS 的部署代码仍在 [momo/deploy/tts](https://github.com/Momoyeyu/momo/tree/master/deploy/tts)。
+momo 的 IndexTTS 2.5 推理服务。momo 设置可在 IndexTTS 和现有 GPT-SoVITS 之间切换，分别保存地址和密钥。两个引擎使用应用内同一份参考音频。[GPT-SoVITS 部署与测试](gpt-sovits/) 在本仓库单独维护。
 
 ## 配置主机
 
@@ -43,6 +43,10 @@ journalctl --user -u 'momo-index-worker@*' -n 80
 外部地址固定在 19880。更新时，空闲端口先加载模型并用参考音合成一段非静音 WAV。验证通过后才原子切换新请求，等旧请求结束再停止旧进程；候选合成失败会保留现有实例。首次启动前和主机重启后可用 `./manage probe` 确认就绪。若账号需要在退出 SSH 后或开机时自动运行服务，请确认该账号的 user systemd linger 已设好。
 
 当前两个实例共享固定运行环境和权重。更新上游模型或 CUDA/Python 环境时需要单独维护窗口，常规热重启适用于推理服务代码和进程。
+
+## 验证范围
+
+ms33 的 RTX 5090 D 上已实测中、英、日三种语言，均返回 22.05 kHz 单声道 PCM16。两个模型实例通过同一网关切换，旧进程退出后继续合成。该轮使用临时目录，长期服务部署依赖宿主机的可写数据盘。
 
 ## HTTP 契约
 
