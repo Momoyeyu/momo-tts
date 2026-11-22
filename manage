@@ -58,6 +58,10 @@ load_configuration() {
 
 prepare_models() {
     command -v uv >/dev/null || fail "Install uv before running prepare-models"
+    if systemctl --user is-active --quiet momo-index-worker@19881.service ||
+        systemctl --user is-active --quiet momo-index-worker@19882.service; then
+        fail "Stop both workers in a maintenance window before changing the shared model environment"
+    fi
     if [[ ! -d "$state/upstream/.git" ]]; then
         git init -q "$state/upstream"
         git -C "$state/upstream" remote add origin https://github.com/index-tts/index-tts.git
@@ -110,17 +114,24 @@ probe() {
     PYTHONPATH="$source_dir" "$state/gateway-env/bin/python" -m momo_tts.probe "$@"
 }
 
+point_slot() {
+    local slot="$1" target="$2"
+    ln -sfn "$target" "$state/slots/$slot.new"
+    mv -Tf "$state/slots/$slot.new" "$state/slots/$slot"
+}
+
 switch_worker() {
     local operation="$1" reference="${2:?Pass a licensed speech reference for the synthesis check}"
     [[ -r "$reference" ]] || fail "Cannot read reference audio"
     [[ -d "$state/gateway" ]] || fail "Run bootstrap first"
-    local previous= candidate=19881 unit
+    local previous= candidate=19881 unit previous_target
     if [[ -f "$state/active" ]]; then
         previous=$(<"$state/active")
         [[ "$previous" = 19881 || "$previous" = 19882 ]] || fail "Invalid live slot"
         if [[ "$previous" = 19881 ]]; then candidate=19882; fi
     fi
     unit="momo-index-worker@$candidate.service"
+    previous_target=$(readlink "$state/slots/$candidate" || true)
     # A previous drain can leave the spare worker alive. Retire it before replacing its files.
     if [[ "$operation" != rollback ]]; then
         flock -w 130 "$state/$candidate.lock" systemctl --user disable --now "$unit"
@@ -138,19 +149,21 @@ switch_worker() {
             git -C "$source_dir" archive "$release" | tar -xf - -C "$pending"
             mv "$pending" "$state/releases/$release"
         )
-        ln -sfn "$state/releases/$release" "$state/slots/$candidate.new"
-        mv -Tf "$state/slots/$candidate.new" "$state/slots/$candidate"
+        point_slot "$candidate" "$state/releases/$release"
     else
         [[ -n "$previous" && -d "$state/slots/$candidate" ]] || fail "No rollback worker is available"
     fi
     systemctl --user reset-failed "$unit" 2>/dev/null || true
-    if ! systemctl --user start "$unit" || ! probe "$candidate" --wait 600 --reference "$reference"; then
-        systemctl --user stop "$unit"
-        fail "Candidate failed synthesis; active endpoint was unchanged"
-    fi
-    if ! systemctl --user enable "$unit"; then
-        systemctl --user stop "$unit"
-        fail "Candidate could not be enabled; active endpoint was unchanged"
+    if ! systemctl --user start "$unit" ||
+        ! probe "$candidate" --wait 600 --reference "$reference" ||
+        ! systemctl --user enable "$unit"; then
+        systemctl --user disable --now "$unit" || true
+        if [[ -n "$previous_target" ]]; then
+            point_slot "$candidate" "$previous_target"
+        else
+            rm -f "$state/slots/$candidate"
+        fi
+        fail "Candidate failed deployment; active endpoint was unchanged"
     fi
     printf '%s\n' "$candidate" > "$state/active.new"
     mv -T "$state/active.new" "$state/active"
