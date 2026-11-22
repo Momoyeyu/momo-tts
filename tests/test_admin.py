@@ -13,6 +13,7 @@ import wave
 from fastapi.testclient import TestClient
 
 from momo_tts.admin import create_app
+from momo_tts.control import DataLayout
 
 KEY = b"local-admin-console-key-for-tests-only"
 AUTH = {"Authorization": f"Bearer {KEY.decode()}"}
@@ -26,8 +27,10 @@ class AdminTest(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.data_root = self.directory / "data"
         self.data_root.mkdir()
+        self.layout = DataLayout(self.directory)
+        self.layout.select(str(self.data_root))
         self.app = create_app(
-            self.directory, self.directory / "state", key=KEY, allowed_data_root=self.data_root
+            self.directory, self.directory / "state", key=KEY, storage=self.layout
         )
 
     def client(self, host="127.0.0.1"):
@@ -51,7 +54,7 @@ class AdminTest(unittest.TestCase):
         origin = "https://console.example.test"
         app = create_app(
             self.directory, self.directory / "state", key=KEY,
-            allowed_data_root=self.data_root, public_origin=origin,
+            storage=self.layout, public_origin=origin,
         )
         # TLS terminates before uvicorn. Forwarded headers alone confer no trust.
         async def fake(*args):
@@ -73,7 +76,7 @@ class AdminTest(unittest.TestCase):
             }).status_code, 403)
         with TestClient(create_app(
             self.directory, self.directory / "state", key=KEY,
-            allowed_data_root=self.data_root, public_origin=origin,
+            storage=self.layout, public_origin=origin,
         ), base_url=origin, client=("198.51.100.1", 12345)) as client:
             self.assertEqual(client.get("/api/status", headers=AUTH).status_code, 403)
 
@@ -148,11 +151,28 @@ class AdminTest(unittest.TestCase):
         self.assertEqual(observed["permissions"], 0o600)
         self.assertEqual(list((self.directory / "state").iterdir()), [])
 
-    def test_configuration_stays_within_allowed_data_root(self):
-        outside = self.directory / "private"
-        outside.mkdir()
-        (self.data_root / "outside").symlink_to(outside, target_is_directory=True)
-        target = self.data_root / "模型 $(literal)"
+    def test_storage_is_global_and_locked_after_configuration(self):
+        selected = self.directory / "second disk" / "speech"
+        with self.client() as client:
+            self.assertEqual(client.get("/api/storage").status_code, 401)
+            self.assertEqual(client.get("/api/storage", headers=AUTH).json(), {
+                "data_root": str(self.data_root.resolve()), "editable": True,
+            })
+            self.assertEqual(client.post("/api/storage", headers=AUTH, json={"data_root": "relative"}).status_code, 422)
+            response = client.post("/api/storage", headers=AUTH, json={"data_root": str(selected)})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"data_root": str(selected.resolve()), "editable": True})
+            service = self.directory / ".config/momo-index/service.env"
+            service.parent.mkdir()
+            service.touch()
+            self.assertEqual(client.post("/api/storage", headers=AUTH, json={
+                "data_root": str(self.data_root),
+            }).status_code, 409)
+            self.assertEqual(client.get("/api/storage", headers=AUTH).json(), {
+                "data_root": str(selected.resolve()), "editable": False,
+            })
+
+    def test_configuration_only_accepts_gpu_choice(self):
         entered = threading.Event()
         result = {}
         gpu = "GPU-f9cffdb8-1543-a793-36d8-4d8c92e7fae9"
@@ -166,18 +186,15 @@ class AdminTest(unittest.TestCase):
 
         with patch("momo_tts.admin._invoke", fake), self.client() as client:
             endpoint = "/api/index/configuration"
-            for rejected in (outside / "child", self.data_root / "outside" / "child", self.data_root):
-                response = client.post(endpoint, headers=AUTH, json={"data_dir": str(rejected), "gpu": gpu})
-                self.assertEqual(response.status_code, 422)
             self.assertEqual(client.post(endpoint, headers=AUTH, json={
-                "data_dir": str(target), "gpu": "GPU-not-a-uuid",
+                "data_dir": str(self.data_root), "gpu": gpu,
             }).status_code, 422)
-            response = client.post(endpoint, headers=AUTH, json={"data_dir": str(target), "gpu": gpu})
+            self.assertEqual(client.post(endpoint, headers=AUTH, json={"gpu": "GPU-not-a-uuid"}).status_code, 422)
+            response = client.post(endpoint, headers=AUTH, json={"gpu": gpu})
             self.assertEqual(response.status_code, 202)
             self.assertTrue(entered.wait(2))
         self.assertEqual(result, {
-            "engine": "index", "action": "configure",
-            "metadata": {"data_dir": str(target.resolve()), "gpu": gpu}, "permissions": 0o600,
+            "engine": "index", "action": "configure", "metadata": {"gpu": gpu}, "permissions": 0o600,
         })
         self.assertEqual(list((self.directory / "state").iterdir()), [])
 

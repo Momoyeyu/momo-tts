@@ -56,6 +56,56 @@ def write_environment(path, settings):
     atomic_write(path, "".join(f"{key}={shlex.quote(str(value))}\n" for key, value in settings.items()))
 
 
+
+class DataLayout:
+    engine_directories = {"index": "index-tts", "gpt": "gpt-sovits"}
+
+    def __init__(self, home=None):
+        self.home = Path.home() if home is None else home
+        self.config = self.home / ".config/momo-tts"
+        self.root_file = self.config / "data-root"
+
+    def root(self):
+        selected = read_text(self.root_file)
+        legacy = self.config / "console.env"
+        if not selected and legacy.is_file():
+            selected = installation_environment(legacy).get("MOMO_TTS_ALLOWED_DATA_ROOT")
+        return Path(selected or self.home / ".local/share/momo-tts-data").resolve()
+
+    def editable(self):
+        return not any(
+            (self.home / f".config/momo-{name}/service.env").is_file()
+            for name in self.engine_directories
+        )
+
+    @contextmanager
+    def exclusive(self):
+        self.config.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with (self.config / "storage.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
+    def select(self, value=None):
+        with self.exclusive():
+            return self.select_locked(value)
+
+    def select_locked(self, value):
+        current = self.root()
+        candidate = Path(value) if value else current
+        if not candidate.is_absolute() or any(not char.isprintable() or char == "'" for char in str(candidate)):
+            raise ValueError("DATA_ROOT must be a simple absolute path")
+        candidate = candidate.resolve()
+        if candidate == Path(candidate.anchor):
+            raise ValueError("DATA_ROOT must be a directory below the filesystem root")
+        if candidate != current and not self.editable():
+            raise RuntimeError("The data root is already configured for an engine")
+        candidate.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not os.access(candidate, os.W_OK | os.X_OK):
+            raise PermissionError("The data root must be writable by the service account")
+        if candidate != current or not self.root_file.is_file():
+            atomic_write(self.root_file, str(candidate) + "\n")
+        return candidate
+
 def run(*args, **kwargs):
     return subprocess.run(args, cwd=SOURCE, check=True, **kwargs)
 
@@ -106,30 +156,25 @@ class Installation:
         return values
 
     def configure(self):
+        layout = DataLayout()
+        with layout.exclusive():
+            self._configure(layout)
+
+    def _configure(self, layout):
+        if os.environ.get("DATA_DIR"):
+            raise RuntimeError("Use DATA_ROOT for both engines")
+        root = layout.select_locked(os.environ.get("DATA_ROOT"))
+        bundle = os.environ.get("MOMO_TTS_CONFIGURATION_BUNDLE")
+        gpu = json.loads(Path(bundle).read_text())["gpu"] if bundle else os.environ.get("GPU", "")
         if self.env_path.exists():
             settings = self.settings()
-            data = os.environ.get("DATA_DIR") or settings["MOMO_TTS_DATA"]
-            gpu = os.environ.get("GPU") or settings["CUDA_VISIBLE_DEVICES"]
-            if data != settings["MOMO_TTS_DATA"] or gpu != settings["CUDA_VISIBLE_DEVICES"]:
-                raise RuntimeError("Engine is already configured with a different storage path or GPU")
+            if gpu and gpu != settings["CUDA_VISIBLE_DEVICES"]:
+                raise RuntimeError("Engine is already configured with a different GPU")
             print(f"{LABELS[self.name]} already configured")
             return
-        bundle = os.environ.get("MOMO_TTS_CONFIGURATION_BUNDLE")
-        if bundle:
-            supplied = json.loads(Path(bundle).read_text())
-            data = Path(supplied["data_dir"]).resolve()
-            root = Path(os.environ["MOMO_TTS_ALLOWED_DATA_ROOT"]).resolve()
-            if not data.is_relative_to(root):
-                raise RuntimeError("Choose a directory inside the allowed storage root")
-            gpu = supplied["gpu"]
-        else:
-            data = Path(os.environ.get("DATA_DIR", ""))
-            gpu = os.environ.get("GPU", "")
-        other = Installation("gpt" if self.name == "index" else "index")
-        if other.env_path.exists() and data.resolve() == Path(other.settings()["MOMO_TTS_DATA"]).resolve():
-            raise RuntimeError("Allocate a separate data directory for each engine")
-        if not data.is_absolute() or any(character in str(data) for character in "\n\r'"):
-            raise RuntimeError("DATA_DIR must be a simple absolute path on the data disk")
+        data = root / layout.engine_directories[self.name]
+        if data.is_symlink():
+            raise RuntimeError("The engine data directory must not be a symbolic link")
         if not re.fullmatch(r"\d+|GPU-[0-9a-fA-F-]+", gpu):
             raise RuntimeError("GPU must be an index or the UUID shown by nvidia-smi -L")
         data.mkdir(parents=True, exist_ok=True)
@@ -295,7 +340,7 @@ class Installation:
     def show_status(self):
         state = {"engine": self.name, "online": False, "configured": self.env_path.is_file(),
                  "active_slot": None, "revision": None, "gpu": None, "data_dir": None,
-                 "reference_configured": False, "resident": False, "sessions": 0}
+                 "reference_configured": False, "resident": False, "sessions": 0, "gateway_online": False}
         if state["configured"]:
             settings = self.settings()
             data = Path(settings["MOMO_TTS_DATA"])
@@ -307,21 +352,18 @@ class Installation:
             state.update(gpu=settings["CUDA_VISIBLE_DEVICES"], data_dir=str(data),
                          active_slot=slot or None, revision=self.revision(slot) or None,
                          reference_configured=reference, online=bool(slot and health.get("ready")),
+                         gateway_online=bool(health) or active(self.gateway),
                          resident=health.get("resident") is True, sessions=health.get("sessions", 0))
         print(json.dumps(state))
 
 
-def install_console():
+def install_console(*, reload=False):
     config = Path.home() / ".config/momo-tts"
     state = Path.home() / ".local/share/momo-tts"
     env_path = config / "console.env"
     previous = installation_environment(env_path) if env_path.is_file() else {}
     origin = admin_origin(os.environ.get("ADMIN_ORIGIN") or previous.get("MOMO_TTS_ADMIN_ORIGIN", ""))
-    root = Path(os.environ.get("DATA_ROOT") or previous.get("MOMO_TTS_ALLOWED_DATA_ROOT")
-                or str(Path.home() / ".local/share/momo-tts-data"))
-    if not root.is_absolute() or any(character in str(root) for character in "\n\r'"):
-        raise RuntimeError("DATA_ROOT must be a simple absolute path")
-    root.mkdir(parents=True, exist_ok=True)
+    root = DataLayout().select(os.environ.get("DATA_ROOT"))
     python_path = state / "console-env/bin/python"
     if not python_path.is_file():
         environment = dict(os.environ, UV_CACHE_DIR=str(root / "manager-cache"))
@@ -349,7 +391,7 @@ def install_console():
     systemctl("daemon-reload")
     running = active(unit)
     systemctl("enable", "--now", unit)
-    if running and {field: str(value) for field, value in settings.items()} != previous:
+    if running and (reload or {field: str(value) for field, value in settings.items()} != previous):
         systemctl("restart", unit)
     entry = origin or "http://127.0.0.1:19890"
     print(f"Open {entry} • admin key file: {key}")
@@ -358,10 +400,11 @@ def install_console():
 def main():
     os.umask(0o077)
     action = sys.argv[1]
-    name = os.environ.get("ENGINE", "index")
+    engine = os.environ.get("ENGINE")
+    name = engine or "index"
     try:
-        if action in ("console", "install"):
-            install_console()
+        if action in ("console", "install") or (action == "deploy" and not engine):
+            install_console(reload=action == "deploy")
             return
         if name not in ENGINES:
             raise RuntimeError("Use ENGINE=index or ENGINE=gpt")

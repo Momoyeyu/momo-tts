@@ -2,7 +2,7 @@
 
 const names = {index: "IndexTTS", gpt: "GPT-SoVITS"};
 const actions = {
-  configure: "保存运行配置",
+  configure: "保存 GPU",
   bootstrap: "启动网关",
   prepare: "准备模型",
   deploy: "发布",
@@ -22,6 +22,10 @@ const loginSubmit = node("login-form").querySelector("button");
 const referenceForm = node("reference-form");
 const configurationForm = node("configuration-form");
 const configurationSubmit = configurationForm.querySelector("button");
+const storageForm = node("storage-form");
+const storageInput = node("data-root");
+const storageSubmit = storageForm.querySelector("button");
+let storage = null;
 let status = {};
 let selected = "index";
 let credential = "";
@@ -55,6 +59,7 @@ function render() {
   const info = status[selected] || {};
   const configured = Boolean(info.configured);
   const hasReference = Boolean(info.reference_configured);
+  const gatewayOnline = Boolean(info.gateway_online || info.online);
   const job = info.job || {};
   const busy = pending.has(selected) || job.state === "running";
   for (const tab of tabs) {
@@ -65,9 +70,10 @@ function render() {
     const text = state?.status_unavailable ? "状态未知"
       : state?.online ? state.resident === true ? "模型已加载"
         : state.resident === false ? "网关在线 · 模型休眠" : "网关在线"
-      : state?.configured ? "网关离线" : state ? "未配置" : "读取中";
+      : state?.gateway_online ? "网关在线 · 等待发布"
+        : state?.configured ? "网关离线" : state ? "未配置" : "读取中";
     indicator.textContent = text;
-    indicator.dataset.online = String(state?.status_unavailable ? "unknown" : state?.online ?? "unknown");
+    indicator.dataset.online = String(state?.status_unavailable ? "unknown" : (state?.online || state?.gateway_online) ?? "unknown");
     indicator.dataset.resident = String(state?.online ? state.resident ?? "unknown" : "unknown");
   }
   set("engine-name", names[selected]);
@@ -78,35 +84,31 @@ function render() {
   set("slot", info.active_slot || "—");
   set("sessions", Number.isInteger(info.sessions) ? String(info.sessions) : "—");
   set("gpu", info.gpu || "—");
-  set("data-dir", info.data_dir || "—");
   node("reference-state").dataset.online = hasReference ? "true" : "unknown";
   set("reference-state", hasReference ? "已设置" : "未设置");
 
   const needsConfiguration = info.configured === false && !info.status_unavailable;
-  if (needsConfiguration && configurationForm.hidden) {
-    const directory = selected === "gpt" ? "gpt-sovits" : selected;
-    node("storage").value = info.allowed_data_root ? `${info.allowed_data_root}/${directory}` : "";
-  }
   configurationForm.hidden = !needsConfiguration;
   configurationSubmit.disabled = busy;
   for (const button of controls) {
     const action = button.dataset.action;
     button.disabled = busy || !configured
-      || (action === "bootstrap" && info.online)
+      || (action === "bootstrap" && gatewayOnline)
       || (action === "prepare" && info.resident)
       || (!["bootstrap", "prepare"].includes(action) && !hasReference)
       || (["restart", "rollback"].includes(action) && !info.active_slot)
-      || (["deploy", "probe"].includes(action) && !info.online);
+      || (action === "deploy" && !gatewayOnline)
+      || (action === "probe" && !info.online);
   }
   referenceSubmit.disabled = busy || !configured;
   set("engine-hint", actionError || pollError || (info.status_unavailable ? "无法读取主机状态，请刷新。"
-    : configured && !info.online ? "启动网关后即可发布。"
+    : configured && !gatewayOnline ? "启动网关后即可发布。"
     : configured && !hasReference ? "设置部署参考音后即可发布。" : ""));
   node("engine-hint").classList.toggle("error", Boolean(actionError || pollError));
   set("reference-error", referenceError);
   set("configuration-error", configurationError);
 
-  const failure = job.action === "configure" ? "保存失败，请检查数据目录和 GPU"
+  const failure = job.action === "configure" ? "保存失败，请检查 GPU"
     : job.action === "prepare" ? "准备失败，请检查下载环境和可用空间"
     : job.action === "bootstrap" ? "网关启动失败，请检查端口占用"
     : job.action === "rollback" ? "回滚失败，请检查上一个发布版本和参考音"
@@ -117,6 +119,19 @@ function render() {
   const text = jobText ? `${actions[job.action]} · ${jobText}` : "暂无操作";
   // Updating identical text would repeat this message for screen-reader users.
   if (node("job-state").textContent !== text) set("job-state", text);
+}
+
+function updateStorage(next) {
+  if (!next.editable || !storageInput.value || storageInput.value === storage?.data_root) {
+    storageInput.value = next.data_root;
+  }
+  storage = next;
+  storageInput.readOnly = !next.editable;
+  storageSubmit.hidden = !next.editable;
+}
+
+function readConsole(key) {
+  return Promise.all([api("/api/status", key), api("/api/storage", key)]);
 }
 
 function update(list) {
@@ -131,8 +146,11 @@ async function refresh() {
   polling = true;
   node("refresh").disabled = true;
   try {
-    const result = await api("/api/status", key);
-    if (credential === key) update(result);
+    const [engines, layout] = await readConsole(key);
+    if (credential === key) {
+      updateStorage(layout);
+      update(engines);
+    }
   } catch (error) {
     if (credential !== key) return;
     if (error.status === 401) disconnect("请重新输入管理密钥。");
@@ -149,6 +167,9 @@ async function refresh() {
 function disconnect(message = "") {
   credential = "";
   status = {};
+  storage = null;
+  storageForm.reset();
+  set("storage-feedback", "");
   pollError = "";
   actionError = "";
   referenceError = "";
@@ -173,13 +194,14 @@ node("login-form").addEventListener("submit", async event => {
   loginSubmit.disabled = true;
   set("login-error", "");
   try {
-    const result = await api("/api/status", key);
+    const [engines, layout] = await readConsole(key);
     credential = key;
     node("key").value = "";
     node("login").hidden = true;
     node("workspace").hidden = false;
     node("logout").hidden = false;
-    update(result);
+    updateStorage(layout);
+    update(engines);
     void loadGpus(key);
     document.querySelector(`[data-engine="${selected}"]`).focus();
   } catch (error) {
@@ -331,7 +353,6 @@ configurationForm.addEventListener("submit", async event => {
   render();
   try {
     await run(engine, `/api/${engine}/configuration`, JSON.stringify({
-      data_dir: node("storage").value.trim(),
       gpu: node("gpu-choice").value.trim(),
     }));
   } catch (error) {
@@ -341,5 +362,34 @@ configurationForm.addEventListener("submit", async event => {
   } finally {
     pending.delete(engine);
     render();
+  }
+});
+
+
+storageForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  const key = credential;
+  if (!key || !storage?.editable) return;
+  storageSubmit.disabled = true;
+  set("storage-feedback", "");
+  node("storage-feedback").classList.remove("error");
+  try {
+    const layout = await api("/api/storage", key, {
+      method: "POST", body: JSON.stringify({data_root: storageInput.value.trim()}),
+    });
+    if (credential !== key) return;
+    storageInput.value = layout.data_root;
+    updateStorage(layout);
+    set("storage-feedback", "已保存");
+  } catch (error) {
+    if (credential !== key) return;
+    if (error.status === 401) disconnect("请重新输入管理密钥。");
+    else {
+      node("storage-feedback").classList.add("error");
+      set("storage-feedback", error.status ? error.message : "保存失败，请重试。");
+      void refresh();
+    }
+  } finally {
+    storageSubmit.disabled = false;
   }
 });

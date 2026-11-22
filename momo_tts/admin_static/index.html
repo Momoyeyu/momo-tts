@@ -27,6 +27,12 @@
       </form>
     </section>
     <div id="workspace" hidden>
+      <form id="storage-form" class="storage">
+        <label for="data-root">数据目录</label>
+        <input id="data-root" autocomplete="off" spellcheck="false" maxlength="500" required readonly>
+        <button type="submit" hidden>保存</button>
+        <p id="storage-feedback" class="message" role="status"></p>
+      </form>
       <nav class="engines" aria-label="合成引擎">
         <button class="engine" type="button" data-engine="index" aria-pressed="true">
           <strong>IndexTTS</strong><span class="signal" data-online="unknown">读取中</span>
@@ -50,16 +56,13 @@
             <div><dt>工作端口</dt><dd id="slot">—</dd></div>
             <div><dt>活跃会话</dt><dd id="sessions">—</dd></div>
             <div><dt>GPU</dt><dd id="gpu">—</dd></div>
-            <div><dt>数据目录</dt><dd id="data-dir">—</dd></div>
           </dl>
           <form id="configuration-form" hidden>
             <label for="gpu-choice">GPU</label>
             <input id="gpu-choice" list="gpu-devices" autocomplete="off" spellcheck="false" placeholder="选择 GPU 或输入 UUID" required>
             <datalist id="gpu-devices"></datalist>
-            <label for="storage">数据目录</label>
-            <input id="storage" autocomplete="off" spellcheck="false" maxlength="500" required>
             <p id="configuration-error" class="error message" role="alert"></p>
-            <button type="submit">保存运行配置</button>
+            <button type="submit">保存 GPU</button>
           </form>
           <div class="actions" aria-label="引擎操作">
             <button type="button" data-action="bootstrap">启动网关</button>

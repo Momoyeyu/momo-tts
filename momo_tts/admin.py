@@ -10,7 +10,6 @@ import io
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import shutil
 import signal
@@ -25,6 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from .api import MAX_REFERENCE, read_body
+from .control import DataLayout
 from .protocol import admin_origin
 
 Engine = Literal["index", "gpt"]
@@ -33,8 +33,8 @@ STATIC = Path(__file__).with_name("admin_static")
 LOOPBACK = {"127.0.0.1", "::1"}
 HOSTS = LOOPBACK | {"localhost"}
 STATUS_FIELDS = (
-    "online", "configured", "active_slot", "revision", "gpu", "data_dir", "reference_configured",
-    "resident", "sessions",
+    "online", "configured", "active_slot", "revision", "gpu", "reference_configured",
+    "resident", "sessions", "gateway_online",
 )
 GPU_UUID = re.compile(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 COMMAND_TIMEOUT = {"status": 12, "configure": 30, "prepare": 7200, "probe": 120, "set-reference": 30}
@@ -137,7 +137,7 @@ def _reference(raw: bytes) -> tuple[bytes, str, str]:
         raise HTTPException(422, "参考音需要 3–10 秒的单声道 PCM16 WAV、对应台词及语言。") from exc
 
 
-async def _configuration(request: Request, root: Path) -> dict[str, str]:
+async def _settings_body(request: Request) -> dict:
     body = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > 4096:
@@ -145,20 +145,11 @@ async def _configuration(request: Request, root: Path) -> dict[str, str]:
         body.extend(chunk)
     try:
         data = json.loads(body)
-        path, gpu = data["data_dir"], data["gpu"]
-        if not isinstance(path, str) or not isinstance(gpu, str):
+        if not isinstance(data, dict):
             raise ValueError
-        if any(not char.isprintable() or char == "'" for char in path):
-            raise ValueError
-        directory = Path(path)
-        if not directory.is_absolute() or not GPU_UUID.fullmatch(gpu):
-            raise ValueError
-        directory = directory.resolve()
-    except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
-        raise HTTPException(422, "请填写绝对数据目录和有效的 GPU UUID。") from exc
-    if root not in directory.parents or (directory.exists() and not directory.is_dir()):
-        raise HTTPException(422, "请选择允许的数据目录下的子目录。")
-    return {"data_dir": str(directory), "gpu": gpu}
+        return data
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(422, "配置格式无效。") from exc
 
 
 def _gpu_choices():
@@ -177,7 +168,7 @@ def _gpu_choices():
     return choices
 
 
-def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, public_origin=None):
+def create_app(source=None, state_dir=None, key=None, storage=None, public_origin=None):
     external_origin = admin_origin(public_origin if public_origin is not None else os.environ.get("MOMO_TTS_ADMIN_ORIGIN", ""))
     external_host = urlsplit(external_origin).netloc
     @asynccontextmanager
@@ -190,10 +181,7 @@ def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, pu
         if app.state.directory.stat().st_mode & 0o077:
             raise RuntimeError("The admin state directory must be private")
         app.state.key = key if key is not None else _read_key()
-        default_root = Path("/data") / pwd.getpwuid(os.getuid()).pw_name / "momo-tts"
-        app.state.allowed_data_root = Path(allowed_data_root or os.environ.get(
-            "MOMO_TTS_ALLOWED_DATA_ROOT", default_root
-        )).resolve()
+        app.state.storage = storage if storage is not None else DataLayout()
         yield
         tasks = list(active_tasks.values())
         for task in tasks:
@@ -249,8 +237,7 @@ def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, pu
         return job
 
     async def status(engine: str):
-        result = {"engine": engine, "job": jobs.get(engine),
-                  "allowed_data_root": str(app.state.allowed_data_root)}
+        result = {"engine": engine, "job": jobs.get(engine)}
         try:
             code, output = await _invoke(app.state.source, engine, "status")
             details = json.loads(output)
@@ -277,6 +264,26 @@ def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, pu
     async def get_status():
         return await asyncio.gather(status("index"), status("gpt"))
 
+    @app.get("/api/storage", dependencies=[Depends(authorize)])
+    async def get_storage():
+        layout = app.state.storage
+        return {"data_root": str(layout.root()), "editable": layout.editable()}
+
+    @app.post("/api/storage", dependencies=[Depends(authorize)])
+    async def set_storage(request: Request):
+        data = await _settings_body(request)
+        root = data.get("data_root")
+        if not isinstance(root, str) or not root:
+            raise HTTPException(422, "请输入一个可写的绝对路径。")
+        layout = app.state.storage
+        try:
+            selected = await asyncio.to_thread(layout.select, root)
+        except RuntimeError as exc:
+            raise HTTPException(409, "引擎已配置，现有数据需要先迁移。") from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, "请选择当前服务账号可写的绝对目录。") from exc
+        return {"data_root": str(selected), "editable": layout.editable()}
+
     @app.post("/api/{engine}/actions/{action}", dependencies=[Depends(authorize)], status_code=202)
     async def action(engine: Engine, action: Operation):
         ensure_idle(engine)
@@ -299,7 +306,10 @@ def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, pu
     @app.post("/api/{engine}/configuration", dependencies=[Depends(authorize)], status_code=202)
     async def configure(engine: Engine, request: Request):
         ensure_idle(engine)
-        configuration = await _configuration(request, app.state.allowed_data_root)
+        configuration = await _settings_body(request)
+        gpu = configuration.get("gpu")
+        if set(configuration) != {"gpu"} or not isinstance(gpu, str) or not GPU_UUID.fullmatch(gpu):
+            raise HTTPException(422, "请选择 GPU 或输入有效的 GPU UUID。")
         ensure_idle(engine)
         bundle = Path(tempfile.mkdtemp(prefix="configuration-", dir=app.state.directory))
         try:
