@@ -1,0 +1,17 @@
+[Unit]
+Description=momo @LABEL@ inference worker on port %i
+BindsTo=momo-@ENGINE@-gateway.service
+After=momo-@ENGINE@-gateway.service
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+EnvironmentFile=%h/.config/momo-@ENGINE@/service.env
+ExecStart=%h/.local/share/momo-@ENGINE@/run worker %i
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=150s
+UMask=0077
+
+[Install]
+WantedBy=default.target

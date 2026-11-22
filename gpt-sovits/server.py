@@ -210,5 +210,14 @@ def create_app(engine: Engine | None = None, *, loader: Callable | None = None,
 
 def production_app():
     from runtime import load_upstream
-    return create_app(loader=load_upstream, token=os.environ.get('TTS_API_KEY', ''),
+    key_file = os.environ.get('MOMO_TTS_KEY_FILE')
+    token = os.environ.get('TTS_API_KEY', '')
+    if key_file is not None:
+        path = Path(key_file)
+        if path.stat().st_mode & 0o077:
+            raise ValueError('The GPT-SoVITS API key must be a private file')
+        token = path.read_text(encoding='ascii').strip()
+        if len(token) < 32 or any(not 33 <= ord(char) <= 126 for char in token):
+            raise ValueError('The GPT-SoVITS API key must contain at least 32 printable ASCII characters')
+    return create_app(loader=load_upstream, token=token,
                       temp_root=Path(os.environ.get('TTS_TEMP_DIR', '/tmp/momo-tts')))

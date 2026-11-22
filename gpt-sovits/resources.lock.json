@@ -83,7 +83,7 @@
     },
     {
       "path": "pretrained_models/fast_langdetect/lid.176.bin",
-      "url": "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin",
+      "url": "https://huggingface.co/julien-c/fasttext-language-id/resolve/0266da4549434de56667387618bc67dc6d2670ef/lid.176.bin",
       "sha256": "7e69ec5451bc261cc7844e49e4792a85d7f09c06789ec800fc4a44aec362764e",
       "source_revision": "fastText lid.176 release, verified by SHA-256"
     },

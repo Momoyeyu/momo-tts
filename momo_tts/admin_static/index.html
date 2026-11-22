@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>语音管理 · momo</title>
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <main class="console">
+    <header class="top">
+      <div class="identity">
+        <span class="monogram" aria-hidden="true">momo</span>
+        <h1>语音管理</h1>
+      </div>
+      <button id="logout" type="button" hidden>断开</button>
+    </header>
+    <section id="login" class="login" aria-labelledby="login-heading">
+      <div class="pulse" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <form id="login-form">
+        <h2 id="login-heading">连接管理台</h2>
+        <label for="key">管理密钥</label>
+        <input id="key" type="password" autocomplete="off" spellcheck="false" required>
+        <p id="login-error" class="error message" role="alert"></p>
+        <button class="primary" type="submit">连接</button>
+      </form>
+    </section>
+    <div id="workspace" hidden>
+      <nav class="engines" aria-label="合成引擎">
+        <button class="engine" type="button" data-engine="index" aria-pressed="true">
+          <strong>IndexTTS</strong><span class="signal" data-online="unknown">读取中</span>
+        </button>
+        <button class="engine" type="button" data-engine="gpt" aria-pressed="false">
+          <strong>GPT-SoVITS</strong><span class="signal" data-online="unknown">读取中</span>
+        </button>
+      </nav>
+      <div class="engine-body">
+        <section class="operations" aria-labelledby="engine-name">
+          <div class="section-head">
+            <h2 id="engine-name">IndexTTS</h2>
+            <div class="actions">
+              <button id="copy-key" type="button" hidden>复制 API 密钥</button>
+              <button id="refresh" type="button">刷新状态</button>
+            </div>
+          </div>
+          <p id="key-feedback" class="muted message" role="status"></p>
+          <dl class="details">
+            <div><dt>运行版本</dt><dd id="revision">—</dd></div>
+            <div><dt>工作端口</dt><dd id="slot">—</dd></div>
+            <div><dt>活跃会话</dt><dd id="sessions">—</dd></div>
+            <div><dt>GPU</dt><dd id="gpu">—</dd></div>
+            <div><dt>数据目录</dt><dd id="data-dir">—</dd></div>
+          </dl>
+          <form id="configuration-form" hidden>
+            <label for="gpu-choice">GPU</label>
+            <input id="gpu-choice" list="gpu-devices" autocomplete="off" spellcheck="false" placeholder="选择 GPU 或输入 UUID" required>
+            <datalist id="gpu-devices"></datalist>
+            <label for="storage">数据目录</label>
+            <input id="storage" autocomplete="off" spellcheck="false" maxlength="500" required>
+            <p id="configuration-error" class="error message" role="alert"></p>
+            <button type="submit">保存运行配置</button>
+          </form>
+          <div class="actions" aria-label="引擎操作">
+            <button type="button" data-action="bootstrap">启动网关</button>
+            <button type="button" data-action="prepare">准备模型</button>
+            <button type="button" data-action="deploy" class="primary">发布</button>
+            <button type="button" data-action="restart">热重启</button>
+            <button type="button" data-action="rollback">回滚</button>
+            <button type="button" data-action="probe">测试合成</button>
+          </div>
+          <p id="engine-hint" class="muted message"></p>
+          <div class="job" aria-live="polite">
+            <span id="job-state">暂无操作</span>
+            <div class="pulse" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </section>
+        <section class="reference" aria-labelledby="ref-heading">
+          <div class="section-head">
+            <h2 id="ref-heading">部署参考音</h2>
+            <span id="reference-state" class="signal" data-online="unknown">读取中</span>
+          </div>
+          <p class="muted">发布、热重启和回滚会用这段音频验证合成。</p>
+          <form id="reference-form">
+            <label for="audio">参考音频 <span>单声道 PCM16 WAV · 3–10 秒</span></label>
+            <div class="file-control">
+              <input id="audio" type="file" accept=".wav,audio/wav,audio/x-wav" aria-describedby="audio-name" required>
+              <label for="audio" class="file-button" aria-hidden="true">选择 WAV</label>
+              <span id="audio-name">未选择文件</span>
+            </div>
+            <label for="language">录音语言</label>
+            <select id="language" required>
+              <option value="zh">中文</option><option value="en">英语</option><option value="ja">日语</option>
+            </select>
+            <label for="prompt">录音台词</label>
+            <textarea id="prompt" rows="3" maxlength="500" required></textarea>
+            <p id="reference-error" class="error message" role="alert"></p>
+            <button type="submit">保存参考音</button>
+          </form>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

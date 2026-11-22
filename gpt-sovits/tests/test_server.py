@@ -191,3 +191,21 @@ async def test_cancel_while_handler_is_waiting_releases_request_directory(tmp_pa
         await asyncio.wait_for(entered.wait(),2);task.cancel()
         with pytest.raises(asyncio.CancelledError):await task
     assert not list(tmp_path.iterdir())
+
+
+def test_native_production_requires_private_key_file(tmp_path, monkeypatch):
+    from server import production_app
+
+    key = tmp_path / 'key'
+    key.write_text('test-token-' + 'a' * 32 + '\n')
+    monkeypatch.setenv('MOMO_TTS_KEY_FILE', str(key))
+    monkeypatch.setenv('TTS_TEMP_DIR', str(tmp_path))
+    monkeypatch.setattr('runtime.load_upstream', lambda: None)
+    with pytest.raises(ValueError, match='private'):
+        key.chmod(0o644)
+        production_app()
+    key.chmod(0o600)
+    with TestClient(production_app()) as api:
+        assert api.get('/readyz').status_code == 401
+        assert api.post('/tts', json=payload()).status_code == 401
+        assert api.get('/readyz', headers={'Authorization': 'Bearer ' + key.read_text().strip()}).status_code == 503

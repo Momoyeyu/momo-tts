@@ -1,57 +1,71 @@
-# momo 语音服务
+# momo TTS
 
-momo 的 IndexTTS 2.5 推理服务。momo 设置可在 IndexTTS 和现有 GPT-SoVITS 之间切换，分别保存地址和密钥。两个引擎使用应用内同一份参考音频。[GPT-SoVITS 部署与测试](gpt-sovits/) 在本仓库单独维护。
+在自己的 GPU 服务器上运行 **IndexTTS** 和 **GPT-SoVITS**。用一段参考音生成语音，接入 [momo](https://momoyeyu.github.io/momo/) 或其他使用兼容接口的客户端。
 
-## 配置主机
+- **任选引擎** · 两种引擎各有地址和 API 密钥，可以同时部署。
+- **按需用显存** · momo 的预热请求会加载模型。客户端退出并且最后一条请求结束后，模型会释放显存。管理页和网关继续在线。
+- **热更新与回滚** · 新版本先试合成，通过后才接新请求。旧请求可以播完，失败的候选版本会被撤下。
+- **两种管理方式** · 用网页完成首次部署和日常管理，也可以全程用命令行。
 
-需要 Linux x86_64、NVIDIA GPU、支持 CUDA 12.8 的驱动、用户级 systemd、Git、curl、ffmpeg、`uv` 和可写的数据盘。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后确保它在 PATH 中。选择有足够显存同时运行两个模型实例的 GPU，热重启时旧实例会等新实例完成实际合成后才退出。
+## 快速开始
 
-```sh
-nvidia-smi -L
-findmnt -T /path/on/model-disk
-./manage prepare /path/on/model-disk GPU-your-device-uuid
-./manage bootstrap
-./manage deploy /path/to/reference.wav
-./manage probe --reference /path/to/reference.wav --language zh
-```
+准备一台 **Linux x86_64 GPU 主机**。需要 NVIDIA 驱动支持 CUDA 12.8、可用的用户级 systemd、Python 3.11+、Git、Make、curl、ffmpeg 和 [uv](https://docs.astral.sh/uv/getting-started/installation/)。选择一个可写、空间充足的数据目录。热更新时，对应的 GPU 需要能同时容纳两个推理进程。
 
-在 ms33，本机机械阵列挂载于 `/data`。管理员可在该盘为运行服务的账号分配专用目录，再将实际路径传给 `prepare`。源代码、服务配置、API 密钥和轻量网关环境在用户目录；模型权重、Python/CUDA 环境及下载和推理缓存放在指定的数据盘。上游源码和依赖锁固定版本。权重从 ModelScope 和 Hugging Face 的固定版本下载，通过 SHA-256 校验。下载失败后可运行 `./manage prepare-models` 续跑。BigVGAN 下载可使用维护者指定的 `HF_ENDPOINT` 镜像，校验值相同。
-
-参考音频建议使用有权使用的 3–10 秒清晰语音。部署探针只使用指定的本地参考音，服务将请求中的参考音及合成中间文件置于私有临时目录，用完清理。代码库不提供参考音频，模型由 [IndexTTS](https://github.com/index-tts/index-tts) 与 [模型发布页](https://huggingface.co/IndexTeam/IndexTTS-2.5) 提供，使用前查阅其许可。
-
-## 在 momo 中使用
-
-只在主机回环地址监听。远程 GPU 建议通过 SSH 转发连接。保持终端中的隧道运行：
+在 GPU 主机上执行：
 
 ```sh
-ssh -N -o ExitOnForwardFailure=yes -L 19880:127.0.0.1:19880 user@gpu-host
+git clone https://github.com/Momoyeyu/momo-tts.git
+cd momo-tts
+make install
 ```
 
-在 momo 打开「设置 → 模型 → 语音合成」，选择 IndexTTS，填入 `http://127.0.0.1:19880`，将服务器 `~/.config/momo-index/api-key` 的内容填入 API 密钥，再上传参考音频、点击播放图标。对话语言决定合成语言，目前 momo 可传中文、英文和日文。试听成功后可以在声音页控制语音音量和静音。
+`make install` 启动管理服务。默认数据根目录是 `~/.local/share/momo-tts-data`。如要使用另外的数据盘，执行 `make install DATA_ROOT=/path/to/data`。
 
-## 更新和热重启
+在 GPU 主机本机打开 `http://127.0.0.1:19890`。如果从另一台电脑连接，在自己的电脑上运行：
 
 ```sh
-git pull --ff-only
-./manage deploy /path/to/reference.wav      # 使用当前 Git 提交
-./manage restart /path/to/reference.wav     # 使用正在服务的提交
-./manage rollback /path/to/reference.wav    # 切回另一槽最近保留的提交
-./manage probe --reference /path/to/reference.wav --language en
-journalctl --user -u 'momo-index-worker@*' -n 80
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 19890:127.0.0.1:19890 \
+  -L 19880:127.0.0.1:19880 \
+  -L 19884:127.0.0.1:19884 user@gpu-host
 ```
 
-外部地址固定在 19880。更新时，空闲端口先加载模型并用参考音合成一段非静音 WAV。验证通过后才原子切换新请求，等旧请求结束再停止旧进程；候选合成失败会保留现有实例。首次启动前和主机重启后可用 `./manage probe` 确认就绪。若账号需要在退出 SSH 后或开机时自动运行服务，请确认该账号的 user systemd linger 已设好。
+将 `user@gpu-host` 换成自己的 SSH 账号和主机。随后在浏览器打开同一地址。登录用的管理员密钥保存在 GPU 主机的 `~/.config/momo-tts/admin-key`。
 
-当前两个实例共享固定运行环境和权重。更新上游模型或 CUDA/Python 环境时需要单独维护窗口，常规热重启适用于推理服务代码和进程。
+## 在管理页完成第一次合成
 
-## 验证范围
+1. 选一个引擎，设置 GPU 和模型存放目录。
+2. 点击 **准备模型**，等待下载和依赖安装完成，再点击 **启动网关**。
+3. 设置一段 3–10 秒的单人 WAV 作为部署验证音。GPT-SoVITS 需要填选中的语言和录音原话。
+4. 点击 **发布**，等待试合成通过。页面会显示已部署版本。空闲时模型显示为休眠。
+5. 在 momo 打开「设置 → 模型 → 语音合成」，填入对应地址和 API 密钥。上传参考音，再点播放图标试听。
 
-ms33 的 RTX 5090 D 上已实测中、英、日三种语言，均返回 22.05 kHz 单声道 PCM16。两个模型实例通过同一网关切换，旧进程退出后继续合成。该轮使用临时目录，长期服务部署依赖宿主机的可写数据盘。
+| 引擎 | 通过上述隧道访问 | 合成接口 |
+| --- | --- | --- |
+| IndexTTS 2.5 | `http://127.0.0.1:19880` | `POST /v1/audio/speech`，返回 WAV |
+| GPT-SoVITS v2 | `http://127.0.0.1:19884` | `POST /tts`，支持流式输出 |
 
-## HTTP 契约
+管理密钥与合成密钥独立。管理员可以从管理页复制相应引擎的 API 密钥。客户端使用 `Authorization: Bearer <API 密钥>` 访问合成及 `/readyz`。管理服务和推理网关默认只监听回环地址。
 
-- `GET /healthz`：网关存活。
-- `GET /readyz`：当前模型是否就绪。
-- `POST /v1/audio/speech`：JSON 参数为 `input`、`language`、`reference_audio`（base64）、`reference_name`，返回单声道 PCM16 WAV。参考文件上限 10 MiB。就绪及合成接口都要求 `Authorization: Bearer …`。
+## 用命令行管理
 
-服务先合成完整 WAV，再由 momo 解码播放。接口检查可用 `python -m unittest discover -s tests -v`，无需 GPU。GPU 合成和切换需在部署主机另行运行探针验证。
+```sh
+make configure ENGINE=index DATA_DIR=/path/to/data/index GPU=GPU-your-device-uuid
+make prepare ENGINE=index
+make bootstrap ENGINE=index
+make set-reference ENGINE=index REFERENCE=/path/to/reference.wav LANGUAGE=zh
+make deploy ENGINE=index
+
+make status ENGINE=index
+make probe ENGINE=index OUTPUT_LANGUAGE=zh
+make restart ENGINE=index
+make rollback ENGINE=index
+```
+
+GPT-SoVITS 使用 `ENGINE=gpt`，指定它自己的数据目录，并在 `set-reference` 时附上 `PROMPT='录音原话'`。GPU UUID 可用 `nvidia-smi -L` 查询。两个引擎的合成密钥文件分别为 `~/.config/momo-index/api-key` 和 `~/.config/momo-gpt/api-key`。
+
+部署参考音只用于探针和发布验证。momo 在实际合成时使用客户端里上传的参考音。选择你有权使用的录音，并查阅两个上游项目的模型许可。[IndexTTS](https://github.com/index-tts/index-tts) · [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)
+
+### 日常运维
+
+`deploy` 发布当前 Git 提交，`restart` 用当前线上版本热重启，`rollback` 切回上一版。更新共享模型或 CUDA/Python 环境时，给对应引擎留出维护窗口。模型下载失败后可重跑 `make prepare`。需要在退出 SSH 或主机重启后保留服务时，请为运行账号启用用户级 systemd linger。

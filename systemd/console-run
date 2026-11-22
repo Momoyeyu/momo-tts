@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH="$MOMO_TTS_SOURCE"
+exec "$MOMO_TTS_ADMIN_PYTHON" -m uvicorn momo_tts.admin:create_app --factory \
+    --host 127.0.0.1 --port 19890 --no-proxy-headers --no-access-log

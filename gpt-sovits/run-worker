@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+port=${1:-}
+[[ "$port" =~ ^[1-9][0-9]{0,4}$ && "$port" -le 65535 ]] || { printf 'A valid GPT-SoVITS worker port is required.\n' >&2; exit 1; }
+: "${MOMO_TTS_DATA:?Set the absolute GPT-SoVITS data directory}"
+: "${MOMO_TTS_KEY_FILE:?Set the private GPT-SoVITS API key file}"
+: "${CUDA_VISIBLE_DEVICES:?Choose the GPU for GPT-SoVITS}"
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+export MOMO_TTS_WORKER_PORT="$port"
+export MOMO_TTS_UPSTREAM="${MOMO_TTS_UPSTREAM:-$HOME/.local/share/momo-tts-gpt/upstream}"
+export TTS_TEMP_DIR="$MOMO_TTS_DATA/tmp/$port"
+export TMPDIR="$TTS_TEMP_DIR"
+export HF_HOME="$MOMO_TTS_DATA/cache/huggingface"
+export XDG_CACHE_HOME="$MOMO_TTS_DATA/cache"
+export TRITON_CACHE_DIR="$MOMO_TTS_DATA/cache/triton"
+export TORCHINDUCTOR_CACHE_DIR="$MOMO_TTS_DATA/cache/inductor"
+export TORCH_HOME="$MOMO_TTS_DATA/cache/torch"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONDONTWRITEBYTECODE=1
+mkdir -p "$TTS_TEMP_DIR"
+cd "$source_dir"
+exec "$MOMO_TTS_DATA/venv/bin/python" -m uvicorn server:production_app --factory \
+    --host 127.0.0.1 --port "$port" --workers 1 --limit-concurrency 8 \
+    --timeout-graceful-shutdown 90 --no-access-log

@@ -37,9 +37,10 @@ def prepare_config(models: Path, cache: Path) -> Path:
 
 def load_upstream():
     from resources import verify_resources
-    root = Path('/opt/GPT-SoVITS')
-    models = Path('/models')
-    cache = Path('/cache')
+    root = Path(os.environ.get('MOMO_TTS_UPSTREAM', '/opt/GPT-SoVITS'))
+    data = os.environ.get('MOMO_TTS_DATA')
+    models = Path(data) / 'models' if data else Path('/models')
+    cache = Path(data) / 'cache' if data else Path('/cache')
     verify_source(root)
     verify_resources(models)
     import torch
@@ -53,7 +54,8 @@ def load_upstream():
     os.environ['bert_path'] = str(models / 'pretrained_models/chinese-roberta-wwm-ext-large')
     import nltk
     nltk.data.path.insert(0, str(models / 'nltk_data'))
-    config = prepare_config(models, cache)
+    worker_port = os.environ.get('MOMO_TTS_WORKER_PORT')
+    config = prepare_config(models, cache / 'workers' / worker_port if worker_port else cache)
     os.chdir(root)
     sys.path[:0] = [str(root), str(root / 'GPT_SoVITS')]
     previous = sys.argv

@@ -1,0 +1,11 @@
+[Unit]
+Description=momo TTS management console
+
+[Service]
+EnvironmentFile=%h/.config/momo-tts/console.env
+ExecStart=%h/.local/share/momo-tts/console-run
+Restart=on-failure
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+data=${MOMO_TTS_DATA:?Set the absolute GPT-SoVITS data directory}
+upstream=${MOMO_TTS_UPSTREAM:-$HOME/.local/share/momo-tts-gpt/upstream}
+revision=1d9fe63d2875238bc240bd5e7b8dacaee73f8396
+
+[[ "$data" = /* && "$upstream" = /* ]] || {
+    printf 'GPT-SoVITS model data and upstream paths must be absolute.\n' >&2
+    exit 1
+}
+if ! command -v uv >/dev/null && [[ -x "$HOME/.local/bin/uv" ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+command -v uv >/dev/null || { printf 'Install uv before preparing GPT-SoVITS.\n' >&2; exit 1; }
+command -v ffmpeg >/dev/null || { printf 'Install ffmpeg before preparing GPT-SoVITS.\n' >&2; exit 1; }
+
+mkdir -p "$data"/{models,cache,tmp,python} "$upstream"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$data/cache/uv}"
+export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$data/python}"
+export TMPDIR="$data/tmp" XDG_CACHE_HOME="$data/cache"
+export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-6}" UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-3}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+
+if [[ ! -d "$upstream/.git" ]]; then
+    git -C "$upstream" init -q
+fi
+if ! git -C "$upstream" cat-file -e "$revision^{commit}" 2>/dev/null; then
+    git -C "$upstream" fetch --depth 1 https://github.com/RVC-Boss/GPT-SoVITS.git "$revision"
+fi
+GIT_LFS_SKIP_SMUDGE=1 git -C "$upstream" checkout -q --detach "$revision"
+git -C "$upstream" submodule update --init --recursive
+printf '%s\n' "$revision" > "$upstream/.momo-upstream-revision"
+printf '%s  %s\n' '7c1300f5cba7173f59825045c80bb8fb3d22b7cde94b26529128a03241bf7339' "$upstream/api_v2.py" | sha256sum -c -
+
+# Only the dedicated upstream clone receives the model links.
+pretrained="$upstream/GPT_SoVITS/pretrained_models"
+if [[ -d "$pretrained" && ! -L "$pretrained" ]]; then
+    # The pinned checkout contains provenance and download instructions here.
+    # Keep those tracked files and link just the inference assets below.
+    for name in chinese-hubert-base chinese-roberta-wwm-ext-large gsv-v2final-pretrained fast_langdetect; do
+        ln -sfn -- "$data/models/pretrained_models/$name" "$pretrained/$name"
+    done
+else
+    ln -sfn -- "$data/models/pretrained_models" "$pretrained"
+fi
+ln -sfn -- "$data/models/G2PWModel" "$upstream/GPT_SoVITS/text/G2PWModel"
+
+python3 "$source_dir/resources.py" download --root "$data/models"
+if [[ ! -x "$data/venv/bin/python" ]]; then
+    uv venv --python 3.11 "$data/venv"
+fi
+py="$data/venv/bin/python"
+uv pip install --python "$py" --require-hashes -r "$source_dir/requirements-build.lock"
+uv pip install --python "$py" 'cmake==3.31.10'
+# CUDA 12.8 is required for Blackwell. Resolve normal packages from PyPI
+# separately so PyTorch's index cannot shadow the legacy GPT dependencies.
+uv pip install --python "$py" --index 'https://download.pytorch.org/whl/cu128' \
+    'torch==2.8.0+cu128' 'torchaudio==2.8.0+cu128' 'sympy==1.14.0'
+requirements=$(mktemp "$data/tmp/requirements.XXXXXX")
+trap 'rm -f -- "$requirements"' EXIT
+sed -e '/^torch==/d' -e '/^torchaudio==/d' -e '/^-r /d' "$source_dir/requirements-inference.in" > "$requirements"
+PATH="$data/venv/bin:$PATH" uv pip install --python "$py" --no-build-isolation \
+    -r "$requirements" -r "$source_dir/requirements-http.lock" -r "$source_dir/requirements-upstream-api.lock"
+uv pip check --python "$py"

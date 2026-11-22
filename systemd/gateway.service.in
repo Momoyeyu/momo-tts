@@ -1,0 +1,12 @@
+[Unit]
+Description=momo @LABEL@ stable HTTP endpoint
+
+[Service]
+WorkingDirectory=%h/.local/share/momo-@ENGINE@/gateway
+EnvironmentFile=%h/.config/momo-@ENGINE@/service.env
+ExecStart=%h/.local/share/momo-@ENGINE@/run gateway @PORT@
+Restart=on-failure
+UMask=0077
+
+[Install]
+WantedBy=default.target

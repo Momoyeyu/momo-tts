@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+upstream="$MOMO_TTS_STATE/upstream"
+commit=d9e41aac89fd00b3d71497fddb287b7f24613712
+if [[ ! -d "$upstream/.git" ]]; then
+    git init -q "$upstream"
+    git -C "$upstream" remote add origin https://github.com/index-tts/index-tts.git
+fi
+if ! git -C "$upstream" cat-file -e "$commit^{commit}" 2>/dev/null; then
+    git -C "$upstream" fetch --depth 1 origin "$commit"
+fi
+GIT_LFS_SKIP_SMUDGE=1 git -C "$upstream" checkout -q --detach "$commit"
+mkdir -p "$MOMO_TTS_DATA/cache/tagger"
+tagger="$upstream/indextts/utils/tagger_cache"
+if [[ ! -e "$tagger" && ! -L "$tagger" ]]; then
+    ln -s "$MOMO_TTS_DATA/cache/tagger" "$tagger"
+fi
+uv sync --project "$upstream" --python 3.11 --frozen --no-install-project
+uv pip install --python "$MOMO_TTS_DATA/venv/bin/python" -r requirements.txt
+"$MOMO_TTS_DATA/venv/bin/python" -m momo_tts.checkpoints

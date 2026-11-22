@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export MOMO_TTS_ENGINE="${MOMO_TTS_ENGINE:-index}"
+export MOMO_TTS_STATE="${MOMO_TTS_STATE:-${MOMO_INDEX_STATE:-}}"
+export MOMO_TTS_DATA="${MOMO_TTS_DATA:-${MOMO_INDEX_DATA:-}}"
+export MOMO_TTS_KEY_FILE="${MOMO_TTS_KEY_FILE:-${MOMO_INDEX_KEY_FILE:-}}"
+
 case "$1" in
     gateway)
-        exec "$MOMO_INDEX_STATE/gateway-env/bin/python" -m uvicorn momo_tts.gateway:create_app \
-            --factory --host 127.0.0.1 --port 19880 --limit-concurrency 16 --no-access-log
+        exec "$MOMO_TTS_STATE/gateway-env/bin/python" -m uvicorn momo_tts.gateway:create_app \
+            --factory --host 127.0.0.1 --port "${2:-19880}" --limit-concurrency 24 --no-access-log
         ;;
     worker)
-        export PYTHONPATH="$MOMO_INDEX_STATE/slots/$2:$MOMO_INDEX_STATE/upstream"
         export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-        cd "$MOMO_INDEX_DATA"
-        exec "$MOMO_INDEX_DATA/venv/bin/python" -m uvicorn momo_tts.worker:create_app \
+        release="$MOMO_TTS_STATE/slots/$2"
+        if [[ "$MOMO_TTS_ENGINE" = gpt ]]; then
+            exec "$release/gpt-sovits/run-worker" "$2"
+        fi
+        export PYTHONPATH="$release:$MOMO_TTS_STATE/upstream"
+        cd "$MOMO_TTS_DATA"
+        exec "$MOMO_TTS_DATA/venv/bin/python" -m uvicorn momo_tts.worker:create_app \
             --factory --host 127.0.0.1 --port "$2" --limit-concurrency 12 \
             --timeout-graceful-shutdown 135 --no-access-log
         ;;
