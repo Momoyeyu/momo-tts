@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 from .probe import load_reference, make_reference, remote_status, synthesize, wait_ready
-from .protocol import ENGINES, read_key
+from .protocol import ENGINES, admin_origin, read_key
 
 SOURCE = Path(__file__).resolve().parents[1]
 LABELS = {"index": "IndexTTS", "gpt": "GPT-SoVITS"}
@@ -314,7 +314,11 @@ class Installation:
 def install_console():
     config = Path.home() / ".config/momo-tts"
     state = Path.home() / ".local/share/momo-tts"
-    root = Path(os.environ.get("DATA_ROOT") or str(Path.home() / ".local/share/momo-tts-data"))
+    env_path = config / "console.env"
+    previous = installation_environment(env_path) if env_path.is_file() else {}
+    origin = admin_origin(os.environ.get("ADMIN_ORIGIN") or previous.get("MOMO_TTS_ADMIN_ORIGIN", ""))
+    root = Path(os.environ.get("DATA_ROOT") or previous.get("MOMO_TTS_ALLOWED_DATA_ROOT")
+                or str(Path.home() / ".local/share/momo-tts-data"))
     if not root.is_absolute() or any(character in str(root) for character in "\n\r'"):
         raise RuntimeError("DATA_ROOT must be a simple absolute path")
     root.mkdir(parents=True, exist_ok=True)
@@ -332,16 +336,23 @@ def install_console():
     jobs.mkdir(parents=True, exist_ok=True, mode=0o700)
     jobs.chmod(0o700)
     read_key(key)
-    write_environment(config / "console.env", {
+    settings = {
         "MOMO_TTS_ADMIN_KEY_FILE": key, "MOMO_TTS_SOURCE": SOURCE, "MOMO_TTS_ADMIN_STATE": jobs,
         "MOMO_TTS_ADMIN_PYTHON": python_path, "MOMO_TTS_ALLOWED_DATA_ROOT": root,
-    })
+    }
+    if origin:
+        settings["MOMO_TTS_ADMIN_ORIGIN"] = origin
+    write_environment(env_path, settings)
     atomic_write(state / "console-run", (SOURCE / "systemd/console-run").read_text(), 0o700)
     unit = "momo-tts-console.service"
     atomic_write(Path.home() / ".config/systemd/user" / unit, (SOURCE / "systemd" / unit).read_text(), 0o644)
     systemctl("daemon-reload")
+    running = active(unit)
     systemctl("enable", "--now", unit)
-    print(f"Open http://127.0.0.1:19890 • admin key file: {key}")
+    if running and {field: str(value) for field, value in settings.items()} != previous:
+        systemctl("restart", unit)
+    entry = origin or "http://127.0.0.1:19890"
+    print(f"Open {entry} • admin key file: {key}")
 
 
 def main():

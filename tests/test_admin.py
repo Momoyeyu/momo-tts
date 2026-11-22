@@ -47,6 +47,36 @@ class AdminTest(unittest.TestCase):
         with self.client(host="198.51.100.1") as client:
             self.assertEqual(client.get("/", headers=AUTH).status_code, 403)
 
+    def test_https_proxy_uses_explicit_host_and_origin(self):
+        origin = "https://console.example.test"
+        app = create_app(
+            self.directory, self.directory / "state", key=KEY,
+            allowed_data_root=self.data_root, public_origin=origin,
+        )
+        # TLS terminates before uvicorn. Forwarded headers alone confer no trust.
+        async def fake(*args):
+            return 0, b"{}"
+
+        with patch("momo_tts.admin._invoke", fake), TestClient(app, base_url=LOCAL, client=("127.0.0.1", 12345)) as client:
+            host = {"Host": "console.example.test"}
+            self.assertEqual(client.get("/", headers=host).status_code, 200)
+            self.assertEqual(client.get("/api/status", headers=host).status_code, 401)
+            self.assertEqual(client.get("/api/status", headers={**host, **AUTH}).status_code, 200)
+            self.assertEqual(client.post("/api/index/actions/probe", headers={
+                **host, **AUTH, "Origin": "http://console.example.test", "X-Forwarded-Proto": "https",
+            }).status_code, 403)
+            self.assertEqual(client.post("/api/index/actions/probe", headers={
+                **host, **AUTH, "Origin": origin,
+            }).status_code, 202)
+            self.assertEqual(client.get("/", headers={
+                "Host": "foreign.example.test", "X-Forwarded-Host": host["Host"],
+            }).status_code, 403)
+        with TestClient(create_app(
+            self.directory, self.directory / "state", key=KEY,
+            allowed_data_root=self.data_root, public_origin=origin,
+        ), base_url=origin, client=("198.51.100.1", 12345)) as client:
+            self.assertEqual(client.get("/api/status", headers=AUTH).status_code, 403)
+
     def test_status_allowlist_and_single_job_per_engine(self):
         invoked = []
         entered = threading.Event()

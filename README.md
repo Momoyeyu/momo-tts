@@ -32,6 +32,8 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 将 `user@gpu-host` 换成自己的 SSH 账号和主机。随后在浏览器打开同一地址。在 GPU 主机运行 `cat ~/.config/momo-tts/admin-key` 获取管理员密钥，粘贴到登录框。
 
+如果服务器已有 HTTPS 反向代理，也可以用域名直接打开管理页。将代理的上游设为 `http://127.0.0.1:19890`，保留请求的 `Host`，然后运行 `make install ADMIN_ORIGIN=https://console.example.com`。管理页继续使用原有管理密钥。
+
 ## 在管理页完成第一次合成
 
 1. 选一个引擎，设置 GPU 和模型存放目录。

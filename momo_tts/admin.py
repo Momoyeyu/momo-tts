@@ -1,4 +1,4 @@
-"""Loopback-only operator console for the two managed inference services."""
+"""Operator console for both engines, served through a local listener."""
 
 import asyncio
 import base64
@@ -25,6 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from .api import MAX_REFERENCE, read_body
+from .protocol import admin_origin
 
 Engine = Literal["index", "gpt"]
 Operation = Literal["bootstrap", "prepare", "deploy", "restart", "rollback", "probe"]
@@ -176,7 +177,9 @@ def _gpu_choices():
     return choices
 
 
-def create_app(source=None, state_dir=None, key=None, allowed_data_root=None):
+def create_app(source=None, state_dir=None, key=None, allowed_data_root=None, public_origin=None):
+    external_origin = admin_origin(public_origin if public_origin is not None else os.environ.get("MOMO_TTS_ADMIN_ORIGIN", ""))
+    external_host = urlsplit(external_origin).netloc
     @asynccontextmanager
     async def lifespan(app):
         app.state.source = Path(source or os.environ["MOMO_TTS_SOURCE"]).resolve(strict=True)
@@ -210,9 +213,11 @@ def create_app(source=None, state_dir=None, key=None, allowed_data_root=None):
         except ValueError:
             hostname = None
         origin = request.headers.get("origin")
-        if not request.client or request.client.host not in LOOPBACK or hostname not in HOSTS:
-            return PlainTextResponse("Local operator console only", status_code=403, headers=SECURITY)
-        if request.method == "POST" and origin is not None and origin != f"{scheme}://{host}":
+        external = bool(external_host and host.lower() == external_host)
+        if not request.client or request.client.host not in LOOPBACK or not (hostname in HOSTS or external):
+            return PlainTextResponse("Console host not allowed", status_code=403, headers=SECURITY)
+        expected_origin = external_origin if external else f"{scheme}://{host}"
+        if request.method == "POST" and origin is not None and origin != expected_origin:
             return PlainTextResponse("Origin mismatch", status_code=403, headers=SECURITY)
         response = await call_next(request)
         response.headers.update(SECURITY)
