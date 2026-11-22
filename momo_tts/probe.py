@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .protocol import ENGINES, MAX_REFERENCE, MAX_WAV
 
+LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 SAMPLES = {"zh": "你好，欢迎回来。", "en": "Hello, it's good to see you again.", "ja": "こんにちは、おかえりなさい。"}
 
 
@@ -18,7 +19,7 @@ def request(port, route, key, payload=None, timeout=4):
         json.dumps(payload).encode("utf-8") if payload is not None else None,
         {"Authorization": "Bearer " + key.decode("ascii"), "Content-Type": "application/json"},
     )
-    return urllib.request.urlopen(outgoing, timeout=timeout)
+    return LOOPBACK_OPENER.open(outgoing, timeout=timeout)
 
 
 def remote_status(port, key):

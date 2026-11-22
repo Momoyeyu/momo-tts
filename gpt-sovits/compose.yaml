@@ -21,7 +21,7 @@ services:
     ports:
       - '${TTS_BIND:-127.0.0.1}:${TTS_PORT:-9880}:9880'
     environment:
-      TTS_API_KEY: ${TTS_API_KEY:-}
+      TTS_API_KEY: ${TTS_API_KEY:?Set a private GPT-SoVITS API key in .env}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       TORCH_HOME: /cache/torch
       TORCHINDUCTOR_CACHE_DIR: /cache/inductor
