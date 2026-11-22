@@ -37,3 +37,22 @@ class StorageTest(unittest.TestCase):
             with patch.object(Path, "home", return_value=home):
                 control.write_environment(home / ".config/momo-tts/console.env", {"MOMO_TTS_ALLOWED_DATA_ROOT": root})
                 self.assertEqual(control.DataLayout().root(), root)
+
+    def test_console_uses_default_root_and_waits_for_listener(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            with (
+                patch.object(Path, "home", return_value=home),
+                patch.dict(os.environ, {"DATA_ROOT": "", "ADMIN_ORIGIN": ""}),
+                patch("momo_tts.control.run"),
+                patch("momo_tts.control.active", return_value=False),
+                patch("momo_tts.control.systemctl"),
+                patch("momo_tts.control.time.sleep"),
+                patch("momo_tts.control.request") as listener,
+            ):
+                from contextlib import nullcontext
+                listener.side_effect = [ConnectionRefusedError(), nullcontext()]
+                control.install_console(reload=True)
+                self.assertEqual(control.DataLayout().root(), home / ".local/share/momo-tts-data")
+                self.assertEqual(listener.call_count, 2)
+                self.assertEqual(listener.call_args.args[:2], (19890, "/"))

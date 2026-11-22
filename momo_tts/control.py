@@ -12,8 +12,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
-from .probe import load_reference, make_reference, remote_status, synthesize, wait_ready
+from .probe import load_reference, make_reference, remote_status, request, synthesize, wait_ready
 from .protocol import ENGINES, admin_origin, read_key
 
 SOURCE = Path(__file__).resolve().parents[1]
@@ -377,7 +378,7 @@ def install_console(*, reload=False):
     jobs = state / "console"
     jobs.mkdir(parents=True, exist_ok=True, mode=0o700)
     jobs.chmod(0o700)
-    read_key(key)
+    console_key = read_key(key)
     settings = {
         "MOMO_TTS_ADMIN_KEY_FILE": key, "MOMO_TTS_SOURCE": SOURCE, "MOMO_TTS_ADMIN_STATE": jobs,
         "MOMO_TTS_ADMIN_PYTHON": python_path, "MOMO_TTS_ALLOWED_DATA_ROOT": root,
@@ -393,6 +394,15 @@ def install_console(*, reload=False):
     systemctl("enable", "--now", unit)
     if running and (reload or {field: str(value) for field, value in settings.items()} != previous):
         systemctl("restart", unit)
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with request(19890, "/", console_key, timeout=1):
+                break
+        except OSError as error:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Management console did not become reachable on port 19890") from error
+            time.sleep(.25)
     entry = origin or "http://127.0.0.1:19890"
     print(f"Open {entry} • admin key file: {key}")
 
