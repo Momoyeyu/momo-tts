@@ -6,7 +6,6 @@ source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 state="$HOME/.local/share/momo-index"
 config="$HOME/.config/momo-index"
 engine_commit=d9e41aac89fd00b3d71497fddb287b7f24613712
-model_commit=c39ce5ba981572cb187443877ff559dfb246ce63
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -69,28 +68,10 @@ prepare_models() {
     if ! git -C "$state/upstream" cat-file -e "$engine_commit^{commit}" 2>/dev/null; then
         git -C "$state/upstream" fetch --depth 1 origin "$engine_commit"
     fi
-    git -C "$state/upstream" checkout -q --detach "$engine_commit"
+    GIT_LFS_SKIP_SMUDGE=1 git -C "$state/upstream" checkout -q --detach "$engine_commit"
     uv sync --project "$state/upstream" --python 3.11 --frozen --no-install-project
     uv pip install --python "$MOMO_INDEX_DATA/venv/bin/python" -r "$source_dir/requirements.txt"
-    (
-        cd "$MOMO_INDEX_DATA"
-        PYTHONPATH="$state/upstream" "$MOMO_INDEX_DATA/venv/bin/python" - "$model_commit" <<'PY'
-import os
-import sys
-
-from huggingface_hub import snapshot_download
-from indextts.utils.model_download import ensure_models_available
-
-models = os.environ["MOMO_INDEX_MODELS"]
-snapshot_download(
-    "IndexTeam/IndexTTS-2.5",
-    revision=sys.argv[1],
-    local_dir=models,
-    allow_patterns=["*.pth", "*.pt", "*.tiktoken", "config.yaml", "LICENSE"],
-)
-ensure_models_available(models)
-PY
-    )
+    PYTHONPATH="$source_dir" "$MOMO_INDEX_DATA/venv/bin/python" -m momo_tts.checkpoints
 }
 
 bootstrap() {

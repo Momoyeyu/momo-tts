@@ -4,7 +4,7 @@ momo 的 IndexTTS 2.5 推理服务。momo 设置可在 IndexTTS 和现有 GPT-So
 
 ## 配置主机
 
-需要 Linux x86_64、NVIDIA GPU、支持 CUDA 12.8 的驱动、用户级 systemd、Git、ffmpeg、`uv` 和可写的数据盘。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后确保它在 PATH 中。选择有足够显存同时运行两个模型实例的 GPU，热重启时旧实例会等新实例完成实际合成后才退出。
+需要 Linux x86_64、NVIDIA GPU、支持 CUDA 12.8 的驱动、用户级 systemd、Git、curl、ffmpeg、`uv` 和可写的数据盘。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后确保它在 PATH 中。选择有足够显存同时运行两个模型实例的 GPU，热重启时旧实例会等新实例完成实际合成后才退出。
 
 ```sh
 nvidia-smi -L
@@ -15,7 +15,7 @@ findmnt -T /path/on/model-disk
 ./manage probe --reference /path/to/reference.wav --language zh
 ```
 
-在 ms33，本机机械阵列挂载于 `/data`。管理员可在该盘为运行服务的账号分配专用目录，再将实际路径传给 `prepare`。源代码、服务配置、API 密钥和轻量网关环境在用户目录；模型权重、Python/CUDA 环境及下载和推理缓存放在指定的数据盘。上游源码、锁文件和主权重快照均固定版本。辅助模型由官方下载器预先准备。下载失败后可运行 `./manage prepare-models` 续跑。模型运行时使用本地文件。
+在 ms33，本机机械阵列挂载于 `/data`。管理员可在该盘为运行服务的账号分配专用目录，再将实际路径传给 `prepare`。源代码、服务配置、API 密钥和轻量网关环境在用户目录；模型权重、Python/CUDA 环境及下载和推理缓存放在指定的数据盘。上游源码和依赖锁固定版本。权重从 ModelScope 和 Hugging Face 的固定版本下载，通过 SHA-256 校验。下载失败后可运行 `./manage prepare-models` 续跑。BigVGAN 下载可使用维护者指定的 `HF_ENDPOINT` 镜像，校验值相同。
 
 参考音频建议使用有权使用的 3–10 秒清晰语音。部署探针只使用指定的本地参考音，服务将请求中的参考音及合成中间文件置于私有临时目录，用完清理。代码库不提供参考音频，模型由 [IndexTTS](https://github.com/index-tts/index-tts) 与 [模型发布页](https://huggingface.co/IndexTeam/IndexTTS-2.5) 提供，使用前查阅其许可。
 
