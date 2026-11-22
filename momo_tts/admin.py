@@ -3,7 +3,7 @@
 import asyncio
 import base64
 import binascii
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 import csv
 import hmac
 import io
@@ -18,14 +18,18 @@ import subprocess
 import tempfile
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 import wave
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from .api import MAX_REFERENCE, read_body
 from .control import DataLayout
-from .protocol import admin_origin
+from .gateway import LeasedSpeech
+from .network import CONSOLE_PORT, private_ipv4
+from .protocol import ENGINES, admin_origin
 
 Engine = Literal["index", "gpt"]
 Operation = Literal["bootstrap", "prepare", "deploy", "restart", "rollback", "probe"]
@@ -168,9 +172,13 @@ def _gpu_choices():
     return choices
 
 
-def create_app(source=None, state_dir=None, key=None, storage=None, public_origin=None):
+def create_app(source=None, state_dir=None, key=None, storage=None, public_origin=None, lan_address=None,
+               gateway_transport=None):
     external_origin = admin_origin(public_origin if public_origin is not None else os.environ.get("MOMO_TTS_ADMIN_ORIGIN", ""))
     external_host = urlsplit(external_origin).netloc
+    lan = os.environ.get("MOMO_TTS_ADMIN_LAN", "") if lan_address is None else lan_address
+    lan_host = f"{lan}:{CONSOLE_PORT}" if private_ipv4(lan) else ""
+
     @asynccontextmanager
     async def lifespan(app):
         app.state.source = Path(source or os.environ["MOMO_TTS_SOURCE"]).resolve(strict=True)
@@ -182,18 +190,22 @@ def create_app(source=None, state_dir=None, key=None, storage=None, public_origi
             raise RuntimeError("The admin state directory must be private")
         app.state.key = key if key is not None else _read_key()
         app.state.storage = storage if storage is not None else DataLayout()
-        yield
-        tasks = list(active_tasks.values())
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(155, connect=2), trust_env=False, transport=gateway_transport,
+        ) as gateway_client:
+            app.state.gateway_client = gateway_client
+            yield
+            tasks = list(active_tasks.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     active_tasks: dict[str, asyncio.Task] = {}
     jobs: dict[str, dict[str, str]] = {}
 
     @app.middleware("http")
-    async def local_only(request: Request, call_next):
+    async def check_host_and_origin(request: Request, call_next):
         scheme = request.url.scheme
         host = request.headers.get("host", "")
         try:
@@ -202,10 +214,13 @@ def create_app(source=None, state_dir=None, key=None, storage=None, public_origi
             hostname = None
         origin = request.headers.get("origin")
         external = bool(external_host and host.lower() == external_host)
-        if not request.client or request.client.host not in LOOPBACK or not (hostname in HOSTS or external):
+        peer = request.client.host if request.client else ""
+        trusted_local = peer in LOOPBACK and (hostname in HOSTS or external)
+        trusted_lan = bool(lan_host and host == lan_host and private_ipv4(peer))
+        if not (trusted_local or trusted_lan):
             return PlainTextResponse("Console host not allowed", status_code=403, headers=SECURITY)
         expected_origin = external_origin if external else f"{scheme}://{host}"
-        if request.method == "POST" and origin is not None and origin != expected_origin:
+        if request.method in ("POST", "PUT", "DELETE") and origin is not None and origin != expected_origin:
             return PlainTextResponse("Origin mismatch", status_code=403, headers=SECURITY)
         response = await call_next(request)
         response.headers.update(SECURITY)
@@ -339,5 +354,37 @@ def create_app(source=None, state_dir=None, key=None, storage=None, public_origi
         except BaseException:
             shutil.rmtree(bundle)
             raise
+
+    async def forward_speech(request: Request, engine: Engine, route: str):
+        authorization = request.headers.get("authorization")
+        if not authorization:
+            raise HTTPException(401, "Authorization required")
+        client = app.state.gateway_client
+        port = ENGINES[engine].port
+        body = await read_body(request) if request.method == "POST" else None
+        upstream_headers = {"Authorization": authorization, "Content-Type": "application/json"}
+        try:
+            outgoing = client.build_request(request.method, f"http://127.0.0.1:{port}{route}",
+                                            content=body, headers=upstream_headers)
+            upstream = await client.send(outgoing, stream=True)
+        except httpx.HTTPError as error:
+            raise HTTPException(503, "Engine gateway unavailable") from error
+        return LeasedSpeech(upstream, ExitStack())
+
+    @app.get("/{engine}/readyz")
+    async def speech_status(request: Request, engine: Engine):
+        return await forward_speech(request, engine, "/readyz")
+
+    @app.api_route("/{engine}/session/{session}", methods=["PUT", "DELETE"])
+    async def speech_session(request: Request, engine: Engine, session: UUID):
+        return await forward_speech(request, engine, f"/session/{session}")
+
+    @app.post("/index/v1/audio/speech")
+    async def index_speech(request: Request):
+        return await forward_speech(request, "index", ENGINES["index"].speech)
+
+    @app.post("/gpt/tts")
+    async def gpt_speech(request: Request):
+        return await forward_speech(request, "gpt", ENGINES["gpt"].speech)
 
     return app

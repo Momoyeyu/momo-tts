@@ -21,18 +21,11 @@ make deploy
 
 `make deploy` 启动管理服务，默认把数据放在 `~/.local/share/momo-tts-data`。想用另一块盘，可以执行 `make deploy DATA_ROOT=/path/to/data`，也可以在首次配置引擎前从管理页指定。两种引擎会在公共目录下各自创建所需文件夹。
 
-在 GPU 主机本机打开 `http://127.0.0.1:19890`。如果从另一台电脑连接，在自己的电脑上运行：
+部署完成后，终端会给出管理页地址，例如 `http://192.168.1.20:19890`。用能访问这台主机的局域网设备直接打开。在 GPU 主机运行 `cat ~/.config/momo-tts/admin-key` 获取管理员密钥，粘贴到登录框。
 
-```sh
-ssh -N -o ExitOnForwardFailure=yes \
-  -L 19890:127.0.0.1:19890 \
-  -L 19880:127.0.0.1:19880 \
-  -L 19884:127.0.0.1:19884 user@gpu-host
-```
+如果机器有多个网口，可以用 `make deploy ADMIN_BIND=192.168.1.20` 选定地址。默认优先选择当前 SSH 会话接入的内网地址，其次尝试默认路由的内网地址。选择 `ADMIN_BIND=loopback` 可让服务只在本机监听。
 
-将 `user@gpu-host` 换成自己的 SSH 账号和主机。随后在浏览器打开同一地址。在 GPU 主机运行 `cat ~/.config/momo-tts/admin-key` 获取管理员密钥，粘贴到登录框。
-
-如果服务器已有 HTTPS 反向代理，也可以用域名直接打开管理页。将代理的上游设为 `http://127.0.0.1:19890`，保留请求的 `Host`，然后运行 `make deploy ADMIN_ORIGIN=https://console.example.com`。管理页继续使用原有管理密钥。
+局域网入口使用 HTTP。需要加密传输时，可将 HTTPS 反向代理的上游设为 `http://127.0.0.1:19890`，保留请求的 `Host`，并运行 `make deploy ADMIN_BIND=loopback ADMIN_ORIGIN=https://console.example.com`。管理页和下方两个合成地址都在同一个 HTTPS 入口。
 
 ## 在管理页完成第一次合成
 
@@ -40,14 +33,14 @@ ssh -N -o ExitOnForwardFailure=yes \
 2. 点击 **准备模型**，等待下载和依赖安装完成，再点击 **启动网关**。
 3. 设置一段 3–10 秒、单人录制的单声道 PCM16 WAV 作为部署验证音。GPT-SoVITS 需要填选中的语言和录音原话。
 4. 点击 **发布**，等待试合成通过。页面会显示已部署版本。空闲时模型显示为休眠。
-5. 在 momo 打开「设置 → 模型 → 语音合成」，填入对应地址和 API 密钥。上传参考音，再点播放图标试听。
+5. 在 momo 打开「设置 → 模型 → 语音合成」，填入管理页显示的服务地址和对应 API 密钥。上传参考音，再点播放图标试听。
 
-| 引擎 | 通过上述隧道访问 | 合成接口 |
+| 引擎 | 服务地址示例 | 合成接口 |
 | --- | --- | --- |
-| IndexTTS 2.5 | `http://127.0.0.1:19880` | `POST /v1/audio/speech`，返回 WAV |
-| GPT-SoVITS v2 | `http://127.0.0.1:19884` | `POST /tts`，支持流式输出 |
+| IndexTTS 2.5 | `http://192.168.1.20:19890/index` | `POST /v1/audio/speech`，返回 WAV |
+| GPT-SoVITS v2 | `http://192.168.1.20:19890/gpt` | `POST /tts`，支持流式输出 |
 
-管理密钥与合成密钥独立。管理员可以从管理页复制相应引擎的 API 密钥。客户端使用 `Authorization: Bearer <API 密钥>` 访问合成及 `/readyz`。管理服务和推理网关默认只监听回环地址。
+管理密钥与合成密钥独立。管理员可以从管理页查看或复制相应引擎的 API 密钥。客户端使用 `Authorization: Bearer <API 密钥>` 访问合成及 `/readyz`。两种引擎的地址和密钥可以分别保存。
 
 ## 用命令行管理
 

@@ -35,6 +35,15 @@ let actionError = "";
 let referenceError = "";
 let configurationError = "";
 let keyFeedbackTimer;
+node("http-note").hidden = window.isSecureContext;
+node("copy-key").textContent = navigator.clipboard ? "复制 API 密钥" : "查看 API 密钥";
+
+function clearKeyFeedback() {
+  clearTimeout(keyFeedbackTimer);
+  set("key-feedback", "");
+  node("key-value").value = "";
+  node("key-value").hidden = true;
+}
 
 async function api(path, key, options = {}) {
   const response = await fetch(path, {
@@ -78,6 +87,7 @@ function render() {
   }
   set("engine-name", names[selected]);
   node("copy-key").hidden = !configured;
+  set("service-address", info.online ? `${location.origin}/${selected}` : "—");
   const revision = typeof info.revision === "string" ? info.revision : "";
   node("revision").title = revision;
   set("revision", revision.slice(0, 12) || "—");
@@ -174,8 +184,7 @@ function disconnect(message = "") {
   actionError = "";
   referenceError = "";
   configurationError = "";
-  set("key-feedback", "");
-  clearTimeout(keyFeedbackTimer);
+  clearKeyFeedback();
   configurationForm.reset();
   configurationForm.hidden = true;
   node("gpu-devices").replaceChildren();
@@ -236,11 +245,20 @@ node("copy-key").addEventListener("click", async () => {
   const key = credential;
   const button = node("copy-key");
   button.disabled = true;
-  clearTimeout(keyFeedbackTimer);
-  set("key-feedback", "");
+  clearKeyFeedback();
   try {
-    if (!navigator.clipboard) throw new Error("clipboard unavailable");
     const retrieve = () => api(`/api/${engine}/api-key`, key, {method: "POST"});
+    if (!navigator.clipboard) {
+      const result = await retrieve();
+      if (credential !== key || selected !== engine) return;
+      const input = node("key-value");
+      input.value = result.key;
+      input.hidden = false;
+      input.focus();
+      input.select();
+      set("key-feedback", "密钥已选中，可按 Ctrl+C 或 ⌘C 复制。");
+      return;
+    }
     if (typeof ClipboardItem === "function" && navigator.clipboard.write) {
       const content = retrieve().then(result => {
         if (credential !== key) throw new Error("session ended");
@@ -257,7 +275,7 @@ node("copy-key").addEventListener("click", async () => {
     if (credential === key && selected === engine) set("key-feedback", "未能复制密钥，请检查浏览器的剪贴板权限。");
   } finally {
     button.disabled = false;
-    keyFeedbackTimer = setTimeout(() => set("key-feedback", ""), 4500);
+    keyFeedbackTimer = setTimeout(clearKeyFeedback, 15000);
   }
 });
 
@@ -271,8 +289,7 @@ for (const tab of tabs) {
     actionError = "";
     referenceError = "";
     configurationError = "";
-    set("key-feedback", "");
-    clearTimeout(keyFeedbackTimer);
+    clearKeyFeedback();
     configurationForm.reset();
     configurationForm.hidden = true;
     referenceForm.reset();

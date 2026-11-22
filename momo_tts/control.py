@@ -16,6 +16,7 @@ import time
 
 from .probe import load_reference, make_reference, remote_status, request, synthesize, wait_ready
 from .protocol import ENGINES, admin_origin, read_key
+from .network import CONSOLE_PORT, console_address
 
 SOURCE = Path(__file__).resolve().parents[1]
 LABELS = {"index": "IndexTTS", "gpt": "GPT-SoVITS"}
@@ -364,6 +365,10 @@ def install_console(*, reload=False):
     env_path = config / "console.env"
     previous = installation_environment(env_path) if env_path.is_file() else {}
     origin = admin_origin(os.environ.get("ADMIN_ORIGIN") or previous.get("MOMO_TTS_ADMIN_ORIGIN", ""))
+    requested_binding = os.environ.get("ADMIN_BIND")
+    binding = requested_binding or previous.get("MOMO_TTS_ADMIN_BIND") or "auto"
+    saved_address = previous.get("MOMO_TTS_ADMIN_LAN") if not requested_binding and binding == "auto" else ""
+    lan = console_address(saved_address or binding, os.environ.get("SSH_CONNECTION", ""))
     root = DataLayout().select(os.environ.get("DATA_ROOT"))
     python_path = state / "console-env/bin/python"
     if not python_path.is_file():
@@ -382,6 +387,7 @@ def install_console(*, reload=False):
     settings = {
         "MOMO_TTS_ADMIN_KEY_FILE": key, "MOMO_TTS_SOURCE": SOURCE, "MOMO_TTS_ADMIN_STATE": jobs,
         "MOMO_TTS_ADMIN_PYTHON": python_path, "MOMO_TTS_ALLOWED_DATA_ROOT": root,
+        "MOMO_TTS_ADMIN_BIND": binding, "MOMO_TTS_ADMIN_LAN": lan,
     }
     if origin:
         settings["MOMO_TTS_ADMIN_ORIGIN"] = origin
@@ -397,14 +403,19 @@ def install_console(*, reload=False):
     deadline = time.monotonic() + 10
     while True:
         try:
-            with request(19890, "/", console_key, timeout=1):
+            with request(CONSOLE_PORT, "/", console_key, timeout=1):
                 break
         except OSError as error:
             if time.monotonic() >= deadline:
                 raise RuntimeError("Management console did not become reachable on port 19890") from error
             time.sleep(.25)
-    entry = origin or "http://127.0.0.1:19890"
-    print(f"Open {entry} • admin key file: {key}")
+    if lan:
+        print(f"LAN console: http://{lan}:{CONSOLE_PORT} (HTTP)")
+    if origin:
+        print(f"HTTPS console: {origin}")
+    if not lan and not origin:
+        print(f"Local console: http://127.0.0.1:{CONSOLE_PORT}")
+    print(f"Admin key file: {key}")
 
 
 def main():

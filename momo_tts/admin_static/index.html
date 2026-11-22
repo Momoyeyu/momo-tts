@@ -20,6 +20,7 @@
       <div class="pulse" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
       <form id="login-form">
         <h2 id="login-heading">连接管理台</h2>
+        <p id="http-note" class="muted message" hidden>此局域网地址使用 HTTP。需要加密传输时，请用 HTTPS 入口。</p>
         <label for="key">管理密钥</label>
         <input id="key" type="password" autocomplete="off" spellcheck="false" required>
         <p id="login-error" class="error message" role="alert"></p>
@@ -51,7 +52,9 @@
             </div>
           </div>
           <p id="key-feedback" class="muted message" role="status"></p>
+          <input id="key-value" aria-label="API 密钥" autocomplete="off" spellcheck="false" readonly hidden>
           <dl class="details">
+            <div><dt>服务地址</dt><dd><code id="service-address">—</code></dd></div>
             <div><dt>运行版本</dt><dd id="revision">—</dd></div>
             <div><dt>工作端口</dt><dd id="slot">—</dd></div>
             <div><dt>活跃会话</dt><dd id="sessions">—</dd></div>

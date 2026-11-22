@@ -10,6 +10,8 @@ import unittest
 from unittest.mock import patch
 import wave
 
+import httpx
+
 from fastapi.testclient import TestClient
 
 from momo_tts.admin import create_app
@@ -79,6 +81,50 @@ class AdminTest(unittest.TestCase):
             storage=self.layout, public_origin=origin,
         ), base_url=origin, client=("198.51.100.1", 12345)) as client:
             self.assertEqual(client.get("/api/status", headers=AUTH).status_code, 403)
+
+    def test_direct_lan_and_unified_api_keep_separate_keys(self):
+        origin = "http://10.106.129.68:19890"
+        engine_key = "fixture-gpt-key"
+        index_key = "fixture-index-key"
+        outgoing = []
+
+        def gateway(request):
+            outgoing.append((request.method, request.url.port, request.url.path))
+            expected = index_key if request.url.port == 19880 else engine_key
+            if request.headers["Authorization"] != "Bearer " + expected:
+                return httpx.Response(401)
+            if request.url.path == "/tts":
+                return httpx.Response(200, content=b"RIFF\x00pcm", headers={"Content-Type": "audio/wav"})
+            return httpx.Response(200, json={"ready": True})
+
+        app = create_app(self.directory, self.directory / "state", key=KEY, storage=self.layout,
+                         lan_address="10.106.129.68", gateway_transport=httpx.MockTransport(gateway))
+        with TestClient(app, base_url=origin, client=("10.29.241.204", 12345)) as client:
+            self.assertEqual(client.get("/").status_code, 200)
+            self.assertEqual(client.get("/", headers={"Host": "foreign.example.test"}).status_code, 403)
+            self.assertEqual(client.get("/api/status").status_code, 401)
+            self.assertEqual(client.get("/gpt/readyz").status_code, 401)
+            self.assertEqual(client.get("/gpt/readyz", headers=AUTH).status_code, 401)
+            auth = {"Authorization": "Bearer " + engine_key, "Origin": origin}
+            response = client.post("/gpt/tts", json={"text": "hello"}, headers=auth)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"RIFF\x00pcm")
+            self.assertEqual(response.headers["Content-Type"], "audio/wav")
+            self.assertEqual(client.get("/api/status", headers=auth).status_code, 401)
+            self.assertEqual(client.get("/index/readyz", headers=auth).status_code, 401)
+            self.assertEqual(client.get("/index/readyz", headers={"Authorization": "Bearer " + index_key}).status_code, 200)
+            session = "/gpt/session/702c20fc-e31a-43d4-b77f-8540ba773669"
+            self.assertEqual(client.put(session, headers={**auth, "Origin": "https://foreign.example.test"}).status_code, 403)
+            self.assertEqual(client.put(session, headers=auth).status_code, 200)
+            self.assertEqual(outgoing, [
+                ("GET", 19884, "/readyz"), ("POST", 19884, "/tts"),
+                ("GET", 19880, "/readyz"), ("GET", 19880, "/readyz"),
+                ("PUT", 19884, session.removeprefix("/gpt")),
+            ])
+        with TestClient(create_app(self.directory, self.directory / "state", key=KEY, storage=self.layout,
+                                   lan_address="10.106.129.68"),
+                        base_url=origin, client=("198.51.100.1", 12345)) as client:
+            self.assertEqual(client.get("/", headers=AUTH).status_code, 403)
 
     def test_status_allowlist_and_single_job_per_engine(self):
         invoked = []
