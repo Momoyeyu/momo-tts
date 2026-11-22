@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$1" in
+    gateway)
+        exec "$MOMO_INDEX_STATE/gateway-env/bin/python" -m uvicorn momo_tts.gateway:create_app \
+            --factory --host 127.0.0.1 --port 19880 --limit-concurrency 16 --no-access-log
+        ;;
+    worker)
+        export PYTHONPATH="$MOMO_INDEX_STATE/slots/$2:$MOMO_INDEX_STATE/upstream"
+        export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+        cd "$MOMO_INDEX_DATA"
+        exec "$MOMO_INDEX_DATA/venv/bin/python" -m uvicorn momo_tts.worker:create_app \
+            --factory --host 127.0.0.1 --port "$2" --limit-concurrency 12 \
+            --timeout-graceful-shutdown 135 --no-access-log
+        ;;
+esac
