@@ -1,6 +1,6 @@
 # GPT-SoVITS
 
-固定 GPT-SoVITS v2 的推理服务。原生 Linux 发布使用 Python 3.11 和 PyTorch 2.8 CUDA 12.8，支持 ms33 的 NVIDIA GPU。模型、依赖和推理缓存都放在配置的数据盘，推理时使用本地模型。已安装旧版 Docker 的环境仍可按原编排启动。
+固定 GPT-SoVITS v2 的推理服务。原生 Linux 发布使用 Python 3.11 和 PyTorch 2.8 CUDA 12.8。模型、依赖和推理缓存都放在配置的数据盘，推理时使用本地模型。已安装旧版 Docker 的环境仍可按原编排启动。
 
 在仓库根目录用 `make` 准备模型、发布、热重启和回滚。部署说明见 [仓库文档](../README.md) 和 [语音使用与部署](https://momoyeyu.github.io/momo/help/voice.html)。
 
