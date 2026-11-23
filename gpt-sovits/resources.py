@@ -112,12 +112,16 @@ def unpack(root: Path, archive_path: Path, entry):
         path.write_text(json.dumps(receipt, sort_keys=True))
 
 
-def verify_entry(root, entry):
+def verify_digest(path, expected, label):
+    if digest(path) != expected:
+        raise ValueError(f'checksum mismatch: {label}; rerun models setup')
+
+
+def verify_entry(root, entry, verify=verify_digest):
     path = safe_path(root, entry['path'])
     if not path.is_file():
         raise FileNotFoundError(f'missing {entry["path"]}; run the models setup command')
-    if digest(path) != entry['sha256']:
-        raise ValueError(f'checksum mismatch: {entry["path"]}; rerun models setup')
+    verify(path, entry['sha256'], entry['path'])
     if entry.get('archive'):
         receipt = receipt_path(root, entry)
         if not receipt.is_file():
@@ -129,13 +133,48 @@ def verify_entry(root, entry):
             actual = safe_path(root, name)
             if not actual.is_file():
                 raise FileNotFoundError(f'missing extracted resource {name}; rerun models setup')
-            if digest(actual) != expected:
-                raise ValueError(f'checksum mismatch: {name}; rerun models setup')
+            verify(actual, expected, name)
 
 
-def verify_resources(root: Path, manifest=DEFAULT_LOCK):
+def file_identity(path):
+    info = path.stat()
+    # ctime catches an in-place rewrite even if the old mtime is restored.
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def verify_resources(root: Path, manifest=DEFAULT_LOCK, *, digest_cache: Path | None = None):
+    previous = {}
+    if digest_cache is not None:
+        try:
+            value = json.loads(digest_cache.read_text())
+            if isinstance(value, dict):
+                previous = value
+        except (OSError, ValueError):
+            pass
+    verified = {}
+
+    def verify(path, expected, label):
+        identity = file_identity(path)
+        record = [expected, *identity]
+        if previous.get(label) != record:
+            verify_digest(path, expected, label)
+            if file_identity(path) != identity:
+                raise ValueError(f'resource changed while verifying: {label}')
+        verified[label] = record
+
     for entry in load_lock(manifest):
-        verify_entry(Path(root), entry)
+        verify_entry(Path(root), entry, verify if digest_cache is not None else verify_digest)
+
+    if digest_cache is not None and verified != previous:
+        digest_cache.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile('w', dir=digest_cache.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            try:
+                json.dump(verified, handle)
+                handle.close()
+                temporary.replace(digest_cache)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 def download_resources(root: Path, manifest=DEFAULT_LOCK, *, fetch=fetch_resource):

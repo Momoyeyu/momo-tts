@@ -42,7 +42,7 @@ def load_upstream():
     models = Path(data) / 'models' if data else Path('/models')
     cache = Path(data) / 'cache' if data else Path('/cache')
     verify_source(root)
-    verify_resources(models)
+    verify_resources(models, digest_cache=cache / 'verified-resources.json')
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA is unavailable; check NVIDIA driver, container toolkit and Compose GPU reservation')
